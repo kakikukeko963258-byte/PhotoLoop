@@ -87,6 +87,11 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             playing = player.play(); nowPlaying(); return
         }
         let scope = chapter < 0 ? "full" : "chapter-\(chapter + 1)"
+        let bundledName = "photo-\(track.id)-\(scope)"
+        if let bundled = Bundle.main.url(forResource: bundledName, withExtension: "mp3") {
+            load(bundled)
+            return
+        }
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("photo-\(track.id)-\(scope)-v2.caf")
         if FileManager.default.fileExists(atPath: url.path) { load(url); return }
         generating = true; message = "写真\(track.id)の音声を作成中…初回のみ時間がかかります"
@@ -241,7 +246,7 @@ struct ContentView: View {
                             }
                         }
                     }
-                    Text("初回は画面を開いたまま音声の作成完了をお待ちください。作成後はオフライン・画面ロック中も再生できます。").font(.footnote).foregroundStyle(.secondary)
+                    Text("Google翻訳の英語音声を収録。初回からオフライン・画面ロック中も再生できます。").font(.footnote).foregroundStyle(.secondary)
                 }.padding(22)
             }.navigationTitle("写真リスニング").navigationBarTitleDisplayMode(.inline).tint(.indigo)
         }
