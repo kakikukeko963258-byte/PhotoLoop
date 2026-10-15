@@ -32,6 +32,7 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var file: AVAudioFile?
     private var tick: Timer?
     private var renderError: Error?
+    private var generationTimedOut = false
     private var interruption: NSObjectProtocol?
     private var routeChange: NSObjectProtocol?
     var track: Track? { tracks.indices.contains(selected) ? tracks[selected] : nil }
@@ -75,6 +76,7 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("photo-\(track.id)-v1.caf")
         if FileManager.default.fileExists(atPath: url.path) { load(url); return }
         generating = true; message = "写真\(track.id)の音声を作成中…初回のみ時間がかかります"
+        generationTimedOut = false
         file = nil; renderError = nil
         let utterance = AVSpeechUtterance(string: track.text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
@@ -106,7 +108,9 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             guard result.duration > 0 else { throw CocoaError(.fileReadCorruptFile) }
             player = result; result.delegate = self; result.enableRate = true
             result.rate = speed; result.numberOfLoops = looping ? -1 : 0
-            duration = result.duration; message = "音声の準備ができました"; play()
+            duration = result.duration; message = "音声の準備ができました"
+            if generationTimedOut { message = "スリープタイマーで停止しました"; generationTimedOut = false }
+            else { play() }
         } catch {
             try? FileManager.default.removeItem(at: url)
             message = "音声を読み込めません。もう一度再生してください。\(error.localizedDescription)"
@@ -124,7 +128,10 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private func update() {
         if let deadline = deadline {
             remaining = max(0, Int(ceil(deadline.timeIntervalSinceNow)))
-            if deadline <= Date() { pause(); self.deadline = nil; message = "スリープタイマーで停止しました" }
+            if deadline <= Date() {
+                if generating { generationTimedOut = true }
+                pause(); self.deadline = nil; message = "スリープタイマーで停止しました"
+            }
         }
         position = player?.currentTime ?? 0
     }
