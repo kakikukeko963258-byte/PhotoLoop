@@ -1,0 +1,33 @@
+name: Build iPhone IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build for iPhone
+        run: >-
+          xcodebuild -project PhotoLoop.xcodeproj -scheme PhotoLoop
+          -configuration Release -sdk iphoneos -destination 'generic/platform=iOS'
+          -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Package for AltStore
+        run: |
+          mkdir -p package/Payload
+          cp -R build/Build/Products/Release-iphoneos/PhotoLoop.app package/Payload/
+          cd package
+          zip -qr ../PhotoLoop.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhotoLoop-AltStore
+          path: PhotoLoop.ipa
+          if-no-files-found: error
