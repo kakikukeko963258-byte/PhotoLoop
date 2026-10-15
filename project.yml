@@ -5,7 +5,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    PRODUCT_BUNDLE_IDENTIFIER: com.photoloop.englishreader
+    PRODUCT_BUNDLE_IDENTIFIER: com.studyquiz.dailyquiz
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGNING_ALLOWED: NO
 targets:
