@@ -9,6 +9,10 @@ struct Track: Decodable, Identifiable {
     var text: String { sections.joined(separator: "\n\n") }
 }
 
+enum RepeatMode: String, CaseIterable {
+    case off = "オフ", selection = "選択範囲", all = "全体"
+}
+
 @main
 struct PhotoLoopApp: App {
     @StateObject private var audio = AudioModel()
@@ -18,13 +22,16 @@ struct PhotoLoopApp: App {
 final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var tracks: [Track] = []
     @Published var selected = 0
+    @Published var chapter = -1
     @Published var playing = false
     @Published var generating = false
     @Published var message = "写真を選んで再生してください"
     @Published var position: Double = 0
     @Published var duration: Double = 0
     @Published var speed: Float = 1 { didSet { player?.rate = speed; nowPlaying() } }
-    @Published var looping = true { didSet { player?.numberOfLoops = looping ? -1 : 0 } }
+    @Published var repeatMode: RepeatMode = .selection {
+        didSet { player?.numberOfLoops = repeatMode == .selection ? -1 : 0 }
+    }
     @Published var deadline: Date?
     @Published var remaining = 0
     private var player: AVAudioPlayer?
@@ -61,8 +68,14 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func choose(_ index: Int) {
         guard !generating, index != selected else { return }
-        pause(); player = nil; selected = index; position = 0; duration = 0
+        pause(); player = nil; selected = index; chapter = -1; position = 0; duration = 0
         message = "写真\(index + 1)を選択しました"
+    }
+    func chooseChapter(_ index: Int) {
+        guard !generating, let track = track,
+              index == -1 || track.sections.indices.contains(index), index != chapter else { return }
+        pause(); player = nil; chapter = index; position = 0; duration = 0
+        message = index == -1 ? "写真全体を選択しました" : "第\(index + 1)章を選択しました"
     }
     func play() {
         guard !generating, let track = track else { return }
@@ -73,12 +86,13 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             if player.currentTime >= player.duration { player.currentTime = 0 }
             playing = player.play(); nowPlaying(); return
         }
-        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("photo-\(track.id)-v1.caf")
+        let scope = chapter < 0 ? "full" : "chapter-\(chapter + 1)"
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("photo-\(track.id)-\(scope)-v2.caf")
         if FileManager.default.fileExists(atPath: url.path) { load(url); return }
         generating = true; message = "写真\(track.id)の音声を作成中…初回のみ時間がかかります"
         generationTimedOut = false
         file = nil; renderError = nil
-        let utterance = AVSpeechUtterance(string: track.text)
+        let utterance = AVSpeechUtterance(string: chapter < 0 ? track.text : track.sections[chapter])
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         synth.write(utterance) { [weak self] buffer in
@@ -107,7 +121,7 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             let result = try AVAudioPlayer(contentsOf: url)
             guard result.duration > 0 else { throw CocoaError(.fileReadCorruptFile) }
             player = result; result.delegate = self; result.enableRate = true
-            result.rate = speed; result.numberOfLoops = looping ? -1 : 0
+            result.rate = speed; result.numberOfLoops = repeatMode == .selection ? -1 : 0
             duration = result.duration; message = "音声の準備ができました"
             if generationTimedOut { message = "スリープタイマーで停止しました"; generationTimedOut = false }
             else { play() }
@@ -138,13 +152,22 @@ final class AudioModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private func nowPlaying() {
         guard let track = track else { return }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
-            MPMediaItemPropertyTitle: "写真\(track.id) · \(track.title)",
+            MPMediaItemPropertyTitle: "写真\(track.id) · \(chapter < 0 ? "全章" : "第\(chapter + 1)章") · \(track.title)",
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: player?.currentTime ?? 0,
             MPNowPlayingInfoPropertyPlaybackRate: playing ? speed : 0
         ]
     }
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) { playing = false; nowPlaying() }
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        playing = false
+        guard flag, repeatMode == .all else { nowPlaying(); return }
+        if let deadline = deadline, deadline <= Date() { update(); return }
+        guard let track = track, !tracks.isEmpty else { return }
+        if chapter >= 0 && chapter + 1 < track.sections.count { chapter += 1 }
+        else { selected = (selected + 1) % tracks.count; chapter = chapter < 0 ? -1 : 0 }
+        self.player = nil; position = 0; duration = 0
+        play()
+    }
 }
 
 struct ContentView: View {
@@ -164,12 +187,18 @@ struct ContentView: View {
                                 VStack(alignment: .leading) {
                                     Text("写真\(track.id)").font(.caption)
                                     Text(track.title).font(.headline)
-                                    Text("1〜4節をまとめて再生").font(.caption).opacity(0.7)
+                                    Text("全章・章ごとに再生").font(.caption).opacity(0.7)
                                 }
                                 Spacer()
                                 if audio.selected == index { Image(systemName: "checkmark.circle.fill") }
                             }.padding().background(audio.selected == index ? Color.indigo.opacity(0.2) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
                         }.buttonStyle(.plain).disabled(audio.generating)
+                    }
+                    if let track = audio.track {
+                        Picker("章を選択", selection: Binding(get: { audio.chapter }, set: { audio.chooseChapter($0) })) {
+                            Text("写真全体（1〜\(track.sections.count)章）").tag(-1)
+                            ForEach(track.sections.indices, id: \.self) { Text("第\($0 + 1)章").tag($0) }
+                        }.pickerStyle(.menu).disabled(audio.generating)
                     }
                     VStack(spacing: 15) {
                         Text(audio.message).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
@@ -181,7 +210,11 @@ struct ContentView: View {
                             Button { audio.playing ? audio.pause() : audio.play() } label: { Image(systemName: audio.playing ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 66)) }.disabled(audio.generating)
                             Button { audio.seek(audio.position + 15) } label: { Image(systemName: "goforward.15").font(.title) }
                         }.accessibilityElement(children: .contain)
-                        Toggle("この写真をループ再生", isOn: $audio.looping)
+                        Picker("ループ", selection: $audio.repeatMode) {
+                            ForEach(RepeatMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }.pickerStyle(.segmented)
+                        Text(audio.repeatMode == .all ? "全体：写真1→2→3→1の順に繰り返します。章を選んだ場合は次の章へ進みます。" : "選択範囲：選んだ章、または写真全体を繰り返します。オフ：選択範囲の最後で停止します。")
+                            .font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Text("再生速度"); Spacer()
                             Picker("再生速度", selection: $audio.speed) {
